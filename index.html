@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="es">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Nuestro Diario de Aventuras</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Dancing+Script:wght@600;700&family=Poppins:wght@300;400;500;600&display=swap"
+    rel="stylesheet" />
+
+  <link rel="stylesheet" href="/src/style.css" />
+</head>
+
+<body>
+  <div class="hearts-container" id="heartsContainer"></div>
+
+  <!-- LIBRO -->
+  <main class="book-stage">
+    <div class="book-shadow"></div>
+
+    <div class="book" id="book">
+      <!-- Las páginas se crean con JavaScript -->
+    </div>
+
+    <button class="nav-btn prev-btn" id="prevBtn" aria-label="Página anterior">
+      ‹
+    </button>
+
+    <button class="nav-btn next-btn" id="nextBtn" aria-label="Página siguiente">
+      ›
+    </button>
+
+    <div class="book-controls no-print">
+      <button class="btn btn-ghost" id="addPageBtn">+ Nueva página</button>
+      <button class="btn btn-primary" id="printBtn">Imprimir libro</button>
+    </div>
+
+    <p class="page-counter" id="pageCounter"></p>
+  </main>
+
+  <!-- MODAL PARA CREAR PÁGINA -->
+  <div class="modal hidden" id="pageModal">
+    <div class="modal-card">
+      <header class="modal-header">
+        <h2>Nueva página</h2>
+        <button class="close-modal" id="closeModalBtn">✕</button>
+      </header>
+
+      <form id="pageForm">
+        <div class="form-grid">
+          <label>
+            Título de la página
+            <input type="text" id="pageTitle" placeholder="Ej: Nuestro primer viaje" required />
+          </label>
+
+          <label>
+            Tipo de evento
+            <select id="pageType" required>
+              <option value="Viaje">Viaje</option>
+              <option value="Aniversario">Aniversario</option>
+              <option value="Cumpleaños">Cumpleaños</option>
+              <option value="Cita">Cita</option>
+              <option value="Salida">Salida</option>
+              <option value="Momento especial">Momento especial</option>
+              <option value="Otro">Otro</option>
+            </select>
+          </label>
+
+          <label>
+            Fecha
+            <input type="date" id="pageDate" />
+          </label>
+
+          <label>
+            ¿Cuántas fotos?
+            <input type="number" id="photoCount" min="1" max="6" value="2" required />
+          </label>
+        </div>
+
+        <label>
+          Historia o descripción
+          <textarea id="pageText" rows="3" placeholder="Escribe por qué este momento fue especial..."></textarea>
+        </label>
+
+        <div id="photoInputs"></div>
+
+        <div class="form-actions">
+          <button type="submit" class="btn btn-primary">Guardar página</button>
+          <button type="button" class="btn btn-ghost" id="cancelModalBtn">
+            Cancelar
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <audio id="backgroundMusic" autoplay loop preload="auto">
+    <source src="/cancion.mp3" type="audio/mpeg" />
+  </audio>
+
+  <button class="music-btn no-print" id="musicBtn" title="Música">🎵</button>
+
+  <script type="module" src="/src/main.js"></script>
+</body>
+
+</html>
