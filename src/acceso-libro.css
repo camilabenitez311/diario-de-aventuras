@@ -1,0 +1,28 @@
+/* Acceso: no modifica la cuadrícula, las fotos ni los estilos de impresión. */
+body.book-locked #prevBtn,
+body.book-locked #nextBtn,
+body.book-locked #printBtn,
+body.book-locked #addPageBtn,
+body.book-locked #musicBtn { visibility: hidden; pointer-events: none; }
+.book-access { display: flex; flex-direction: column; align-items: center; gap: 10px; width: 100%; max-width: 270px; margin: 15px auto 0; }
+.book-access-label { width: 100%; margin: 0; font: 12px 'Poppins', sans-serif; color: #fffaf0; text-shadow: 0 1px 4px #000; }
+.book-access input { width: 100%; margin-top: 7px; padding: 11px 12px; border: 1px solid #d6b77e; border-radius: 12px; background: #fffaf1f2; color: #513c2b; text-shadow: none; font-size: 16px; }
+.book-access input:focus-visible { outline: 2px solid #ec833b; outline-offset: 2px; }
+.book-access button[type=submit] { max-width: 100%; }
+.book-change-link { border: 0; padding: 5px; background: transparent; color: #fffaf0; font-size: 12px; text-decoration: underline; text-underline-offset: 3px; text-shadow: 0 1px 4px #000; }
+.book-access-status { margin: 0; min-height: 1em; max-height: 72px; overflow-y: auto; font-size: 12px; line-height: 1.5; color: #fffaf0; text-shadow: 0 1px 4px #000; overflow-wrap: anywhere; }
+.book-password-change { margin-top: 16px; padding-top: 12px; border-top: 1px solid #d6b77e; }
+.book-password-change summary { cursor: pointer; font-size: 13px; color: #654329; }
+#passwordChangeForm { margin-top: 12px; }
+#passwordChangeForm input { font-size: 16px; }
+@media screen {
+  body.book-locked #book .cover-content { max-height: 100%; overflow-y: auto; padding: 8px; }
+  body.book-locked #book .cover-text { margin: 14px auto; }
+}
+@media screen and (max-width: 600px) {
+  .book-access { max-width: 250px; gap: 8px; }
+  body.book-locked #book .cover-title { font-size: clamp(29px, 8vw, 42px); }
+}
+@media print { .book-access, .book-password-change { display: none !important; } }
+
+.password-change-status { font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }

@@ -1,5 +1,6 @@
 import { cloud, initCloudPanel, cloudEnabled } from "./cloud.js";
 import "./detalles-galeria.js";
+import "./acceso-libro.css";
 /* =========================================
    ELEMENTOS DEL LIBRO
    ========================================= */
@@ -221,13 +222,22 @@ function createCoverPage() {
         forman parte de nuestra historia.
       </p>
 
-      <button
-        type="button"
-        class="btn btn-primary cover-open no-print"
-        data-open-book
-      >
-        Abrir nuestro libro
-      </button>
+      ${cloud.editor ? `
+        <button type="button" class="btn btn-primary cover-open no-print" data-open-book>
+          Abrir nuestro libro
+        </button>
+      ` : `
+        <form class="book-access no-print" data-book-unlock>
+          <label class="book-access-label">
+            Contraseña del libro
+            <input type="password" name="password" autocomplete="current-password"
+              placeholder="Escribe la contraseña" required aria-label="Contraseña del libro" />
+          </label>
+          <button type="submit" class="btn btn-primary cover-open">Abrir nuestro libro</button>
+          <button type="button" class="book-change-link" data-change-password>Cambiar contraseña</button>
+          <p class="book-access-status" data-book-status role="status" aria-live="polite"></p>
+        </form>
+      `}
     </div>
   `;
 
@@ -503,7 +513,7 @@ function updateControls() {
     isTurning || currentIndex >= totalSheets - 1;
 
   addPageBtn.disabled = isTurning || !cloud.editor;
-  printBtn.disabled = isTurning;
+  printBtn.disabled = isTurning || !cloud.editor;
 
   if (currentIndex === 0) {
     pageCounter.textContent = "Portada";
@@ -546,16 +556,13 @@ function renderBook(targetIndex = currentIndex) {
   // Primera tapa.
   book.appendChild(createCoverPage());
 
-  // Dedicatoria.
-  book.appendChild(createDedicationPage());
-
-  // Recuerdos y páginas de texto.
-  pages.forEach((data, index) => {
-    book.appendChild(createStoryPage(data, index));
-  });
-
-  // Última tapa: solo aparece al imprimir.
-  book.appendChild(createBackCover());
+  if (cloud.editor) {
+    book.appendChild(createDedicationPage());
+    pages.forEach((data, index) => {
+      book.appendChild(createStoryPage(data, index));
+    });
+    book.appendChild(createBackCover());
+  }
 
   // La contraportada no usa la clase "page",
   // por eso no entra en la navegación del libro.
@@ -574,6 +581,7 @@ function renderBook(targetIndex = currentIndex) {
    ========================================= */
 
 async function turnPage(direction) {
+  if (!cloud.editor) { cloud.requestAccess(); return; }
   if (
     isTurning ||
     !pageModal.classList.contains("hidden")
@@ -655,6 +663,7 @@ async function turnPage(direction) {
     }
 
     isTurning = false;
+    if (!cloud.editor) currentIndex = 0;
     showCurrentPage();
   }
 }
@@ -723,6 +732,7 @@ function updateMusicButton() {
 }
 
 async function playMusic() {
+  if (!cloud.editor) return;
   if (
     document.hidden ||
     musicManuallyPaused ||
@@ -939,7 +949,7 @@ book.addEventListener("click", async (event) => {
 function openModal() {
   if (isTurning) return;
   if (!cloud.ready) {
-    alert("Pulsa Desbloquear edición e introduce tu contraseña. Si hubo un error, pulsa Actualizar nube.");
+    alert("Abre el libro con tu contraseña. Si hubo un error de conexión, inténtalo de nuevo.");
     return;
   }
 
@@ -1190,7 +1200,7 @@ pageForm.addEventListener("submit", async (event) => {
    IMPRESIÓN
    ========================================= */
 printBtn.addEventListener("click", async () => {
-  if (isTurning || isSaving) return;
+  if (isTurning || isSaving || !cloud.editor) return;
   printBtn.disabled = true;
   try {
     await document.fonts.ready;
@@ -1325,6 +1335,21 @@ playMusic();
 initCloudPanel({
   onLoaded(loaded) { pages = loaded; renderBook(currentIndex); },
   onAccess() { updateControls(); },
+  onOpened() { renderBook(1); playMusic(); },
+  onLocked() {
+    pages = [];
+    currentIndex = 0;
+    if (photoViewer.open) photoViewer.close();
+    photoViewerImage.removeAttribute("src");
+    pageModal.classList.add("hidden");
+    backgroundMusic.pause();
+    removePrintBook();
+    renderBook(0);
+  },
+  onAccessRequested() {
+    currentIndex = 0;
+    renderBook(0);
+  },
   isBusy: () => isSaving || isTurning || !pageModal.classList.contains("hidden"),
 });
 
@@ -1335,6 +1360,7 @@ function removePrintBook() {
 
 function preparePrintBook() {
   removePrintBook();
+  if (!cloud.editor) return;
   const root = document.createElement("div");
   root.id = "printBook";
   root.setAttribute("aria-hidden", "true");

@@ -25,7 +25,7 @@
   </style>
 </head>
 
-<body class="is-readonly">
+<body class="is-readonly book-locked">
   <div class="hearts-container" id="heartsContainer"></div>
 
   <!-- LIBRO -->
@@ -143,10 +143,26 @@
     <h2 id="cloudTitle">Edición y respaldo</h2>
     <p id="cloudStatus" role="status" aria-live="polite">Preparando…</p>
     <form id="cloudLogin">
-      <label>Contraseña de edición <input id="cloudPassword" type="password" autocomplete="current-password"
+      <label>Contraseña del libro <input id="cloudPassword" type="password" autocomplete="current-password"
           required></label>
-      <button class="btn btn-primary" type="submit">Desbloquear edición</button>
+      <button class="btn btn-primary" type="submit">Abrir el libro</button>
     </form>
+    <details id="passwordChange" class="book-password-change">
+      <summary>Cambiar contraseña</summary>
+      <form id="passwordChangeForm">
+        <label>Contraseña anterior
+          <input id="oldPassword" type="password" autocomplete="current-password" required>
+        </label>
+        <label>Nueva contraseña
+          <input id="newPassword" type="password" autocomplete="new-password" minlength="8" required>
+        </label>
+        <label>Repetir nueva contraseña
+          <input id="repeatPassword" type="password" autocomplete="new-password" minlength="8" required>
+        </label>
+        <button type="submit" class="btn btn-primary">Guardar nueva contraseña</button>
+        <p id="passwordChangeStatus" class="password-change-status" role="status" aria-live="polite"></p>
+      </form>
+    </details>
     <div class="cloud-actions">
       <button type="button" id="backupLocal" class="btn btn-ghost">1. Exportar respaldo local</button>
       <label class="btn btn-ghost">Importar archivo de respaldo
@@ -155,7 +171,7 @@
       <button type="button" id="migrateCloud" class="btn btn-primary">2. Migrar copia local a la nube</button>
       <button type="button" id="refreshCloud" class="btn btn-ghost">Actualizar nube</button>
       <button type="button" id="backupCloud" class="btn btn-ghost">Exportar respaldo de la nube</button>
-      <button type="button" id="logoutCloud" class="btn btn-ghost">Bloquear edición</button>
+      <button type="button" id="logoutCloud" class="btn btn-ghost">Bloquear libro</button>
     </div>
     <p class="cloud-note">Migrar no borra los recuerdos locales. Guarda y comprueba el respaldo descargado antes de
       migrar. Los archivos de respaldo contienen tus fotos y textos: no los subas a GitHub.</p>

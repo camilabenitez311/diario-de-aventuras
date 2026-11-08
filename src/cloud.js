@@ -7,16 +7,24 @@ const EDITOR_EMAIL = "mcb200602@gmail.com";
 const url = import.meta.env.VITE_SUPABASE_URL;
 const publicKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
 export const cloudEnabled = Boolean(url && publicKey);
-const client = cloudEnabled ? createClient(url, publicKey) : null;
+const client = cloudEnabled ? createClient(url, publicKey, {
+    auth: { persistSession: false, autoRefreshToken: true, detectSessionInUrl: false },
+}) : null;
 let user = null;
 let loaded = false;
+let accessEpoch = 0;
+let authAction = false;
 let running = false;
 let hooks;
 let signedAt = 0;
 let sourceBackup = null;
 let backupAcknowledged = false;
 const el = (id) => document.getElementById(id);
-function status(text) { el("cloudStatus").textContent = text; }
+function status(text) {
+    el("cloudStatus").textContent = text;
+    if (el("passwordChangeStatus")) el("passwordChangeStatus").textContent = text;
+    document.querySelectorAll("[data-book-status]").forEach((node) => { node.textContent = text; });
+}
 function fail(error) { console.error(error); status("Error: " + error.message); }
 function check(error) { if (error) throw error; }
 function localPages() {
@@ -25,18 +33,36 @@ function localPages() {
     return value;
 }
 function requireUser() {
-    if (!client || user?.id !== OWNER_ID) throw new Error("Desbloquea la edición con tu contraseña");
+    if (!client || user?.id !== OWNER_ID) throw new Error("Abre el libro con tu contraseña");
 }
 function syncUI() {
     const editor = Boolean(user?.id === OWNER_ID && loaded);
     document.body.classList.toggle("is-readonly", !editor);
+    document.body.classList.toggle("book-locked", !editor);
     el("cloudLogin").hidden = editor;
-    el("logoutCloud").hidden = !editor;
-    el("migrateCloud").hidden = !editor;
-    el("backupCloud").hidden = !editor;
+    for (const id of ["logoutCloud", "migrateCloud", "backupCloud", "refreshCloud"]) el(id).hidden = !editor;
     el("importBackup").closest("label").hidden = !editor;
-    el("openCloudPanel").textContent = editor ? "Edición y respaldo" : "Desbloquear edición";
+    el("openCloudPanel").textContent = editor ? "Edición y respaldo" : "Acceso y respaldo";
     hooks?.onAccess?.();
+}
+function clearBook() {
+    accessEpoch++;
+    user = null;
+    loaded = false;
+    sourceBackup = null;
+    backupAcknowledged = false;
+    hooks?.onLocked?.();
+    syncUI();
+}
+function requestAccess() {
+    hooks?.onAccessRequested?.();
+    document.querySelector("[data-book-unlock] input")?.focus();
+}
+function clearPasswordFields() {
+    for (const id of ["cloudPassword", "oldPassword", "newPassword", "repeatPassword"]) {
+        if (el(id)) el(id).value = "";
+    }
+    document.querySelectorAll("[data-book-unlock] input").forEach((node) => { node.value = ""; });
 }
 function downloadJson(data, name) {
     const blob = new Blob([JSON.stringify(data)], { type: "application/json" });
@@ -77,7 +103,7 @@ function validatePage(page) {
     }
 }
 async function readRows() {
-    if (!client) throw new Error("Falta configurar Supabase");
+    requireUser();
     const rows = [];
     for (let start = 0; ; start += 500) {
         const { data, error } = await client.from("diary_pages").select("*")
@@ -91,16 +117,19 @@ async function materialize(row) {
     const photos = [];
     for (const photo of row.content.photos || []) {
         if (!photo.path?.startsWith(OWNER_ID + "/")) throw new Error("Ruta de foto no válida");
-        const { data, error } = await client.storage.from(BUCKET).createSignedUrl(photo.path, 3600);
+        const { data, error } = await client.storage.from(BUCKET).createSignedUrl(photo.path, 600);
         check(error);
         photos.push({ ...photo, src: data.signedUrl });
     }
     return { ...row.content, photos, _cloudId: row.id, _position: row.position };
 }
 async function load() {
+    requireUser();
+    const epoch = accessEpoch;
     const rows = await readRows();
     const result = [];
     for (const row of rows) result.push(await materialize(row));
+    if (epoch !== accessEpoch || user?.id !== OWNER_ID) throw new Error("El libro se ha bloqueado");
     loaded = true; signedAt = Date.now();
     return result;
 }
@@ -168,35 +197,139 @@ export const cloud = {
     load, persist,
     get ready() { return Boolean(user?.id === OWNER_ID && loaded && !running); },
     get editor() { return Boolean(user?.id === OWNER_ID && loaded); },
+    requestAccess,
 };
 async function refresh() {
     const list = await load();
     hooks.onLoaded(list);
-    status(`${list.length} recuerdos en la nube. ${user?.id === OWNER_ID ? "Edición desbloqueada." : "Solo lectura: no necesitas contraseña para verlos."} La copia local permanece intacta.`);
+    status(`Libro abierto: ${list.length} recuerdos en la nube. Puedes leer y administrar el diario.`);
 }
 async function run(task) {
     if (running || hooks.isBusy()) {
         status("Termina de guardar o cierra el formulario antes de continuar."); return;
     }
     running = true;
-    for (const button of el("cloudPanel").querySelectorAll("button, input")) button.disabled = true;
+    for (const button of document.querySelectorAll("#cloudPanel button, #cloudPanel input, [data-book-unlock] button, [data-book-unlock] input")) button.disabled = true;
     try { await task(); }
     catch (error) { fail(error); }
     finally {
         running = false;
-        for (const button of el("cloudPanel").querySelectorAll("button, input")) button.disabled = false;
+        for (const button of document.querySelectorAll("#cloudPanel button, #cloudPanel input, [data-book-unlock] button, [data-book-unlock] input")) button.disabled = false;
         syncUI();
     }
 }
+
+async function unlock(password) {
+    if (!client) throw new Error("Faltan las variables de configuración de Supabase");
+    status("Comprobando contraseña…");
+    authAction = true;
+    try {
+        const { data, error } = await client.auth.signInWithPassword({ email: EDITOR_EMAIL, password });
+        if (error) throw new Error("No se pudo abrir. Comprueba la contraseña, la cuenta confirmada y la conexión.");
+        if (data.user?.id !== OWNER_ID) {
+            await client.auth.signOut({ scope: "local" });
+            throw new Error("La cuenta no corresponde al propietario configurado");
+        }
+        user = data.user;
+        await refresh();
+        clearPasswordFields();
+        if (el("cloudPanel").open) el("cloudPanel").close();
+        hooks.onOpened?.();
+    } catch (error) {
+        try { await client.auth.signOut({ scope: "local" }); } catch { }
+        clearBook();
+        throw error;
+    } finally { authAction = false; }
+}
+
+async function changePassword(oldPassword, newPassword, confirmation) {
+    if (!client) throw new Error("Faltan las variables de configuración de Supabase");
+    if (newPassword !== confirmation) throw new Error("Las contraseñas nuevas no coinciden");
+    if (newPassword.length < 8) throw new Error("La nueva contraseña debe tener al menos 8 caracteres");
+    if (newPassword === oldPassword) throw new Error("La nueva contraseña debe ser distinta de la anterior");
+    status("Verificando la contraseña anterior…");
+    // Cliente aislado: comprobar la anterior no abre el libro ni altera su sesión.
+    const verifier = createClient(url, publicKey, {
+        auth: {
+            persistSession: false, autoRefreshToken: false, detectSessionInUrl: false,
+            storageKey: "diario-password-verifier"
+        },
+    });
+    let changed = false;
+    let globalSignOutError = null;
+    try {
+        const { data, error } = await verifier.auth.signInWithPassword({ email: EDITOR_EMAIL, password: oldPassword });
+        if (error || data.user?.id !== OWNER_ID) throw new Error("No se pudo comprobar la contraseña anterior. Revisa también tu conexión.");
+        const result = await verifier.auth.updateUser({ password: newPassword, current_password: oldPassword });
+        if (result.error) throw new Error("Supabase no cambió la contraseña: " + result.error.message);
+        changed = true;
+        // Revoca sesiones renovables. Los JWT y enlaces ya emitidos pueden durar hasta caducar.
+        authAction = true;
+        const signedOut = await verifier.auth.signOut({ scope: "global" });
+        globalSignOutError = signedOut.error;
+    } finally {
+        try { await verifier.auth.signOut({ scope: "local" }); } catch { }
+        if (changed) {
+            try { await client.auth.signOut({ scope: "local" }); } catch { }
+            clearBook();
+            clearPasswordFields();
+            el("passwordChangeForm").reset();
+            status(globalSignOutError
+                ? "Contraseña actualizada. El libro se bloqueó aquí, pero no se pudo confirmar el cierre de las otras sesiones."
+                : "Contraseña actualizada. El libro está bloqueado: ábrelo con la nueva contraseña.");
+        }
+        authAction = false;
+    }
+}
+
 export async function initCloudPanel(callbacks) {
     hooks = callbacks;
     const panel = el("cloudPanel");
     el("openCloudPanel").onclick = () => { if (!panel.open) panel.showModal(); };
     el("closeCloudPanel").onclick = () => { if (!running) panel.close(); };
     panel.addEventListener("cancel", (event) => { if (running) event.preventDefault(); });
-    panel.addEventListener("close", () => { el("cloudPassword").value = ""; });
-    // Este dialog es independiente del visor; no pasa páginas con las flechas.
+    panel.addEventListener("close", () => {
+        for (const id of ["cloudPassword", "oldPassword", "newPassword", "repeatPassword"]) el(id).value = "";
+    });
     panel.addEventListener("keydown", (event) => event.stopPropagation());
+    bookEvents();
+    function bookEvents() {
+        document.getElementById("book").addEventListener("submit", (event) => {
+            if (!event.target.matches("[data-book-unlock]")) return;
+            event.preventDefault();
+            const password = event.target.elements.password.value;
+            run(() => unlock(password));
+        });
+        document.getElementById("book").addEventListener("click", (event) => {
+            if (!event.target.closest("[data-change-password]")) return;
+            if (!panel.open) panel.showModal();
+            el("passwordChange").open = true;
+            el("oldPassword").focus();
+        });
+    }
+    el("cloudLogin").onsubmit = (event) => {
+        event.preventDefault();
+        const password = el("cloudPassword").value;
+        run(() => unlock(password));
+    };
+    el("passwordChangeForm").onsubmit = (event) => {
+        event.preventDefault();
+        const oldPassword = el("oldPassword").value;
+        const newPassword = el("newPassword").value;
+        const confirmation = el("repeatPassword").value;
+        run(() => changePassword(oldPassword, newPassword, confirmation));
+    };
+    el("refreshCloud").onclick = () => run(refresh);
+    el("logoutCloud").onclick = () => run(async () => {
+        authAction = true;
+        try {
+            if (client) { const { error } = await client.auth.signOut({ scope: "local" }); check(error); }
+            clearBook();
+            clearPasswordFields();
+            panel.close();
+            status("Libro bloqueado. Introduce la contraseña para volver a abrirlo.");
+        } finally { authAction = false; }
+    });
     el("backupLocal").onclick = () => {
         try {
             const list = sourceBackup || localPages();
@@ -218,32 +351,6 @@ export async function initCloudPanel(callbacks) {
         } catch (error) { fail(error); }
         finally { event.target.value = ""; }
     };
-    el("cloudLogin").onsubmit = (event) => {
-        event.preventDefault();
-        run(async () => {
-            if (!client) throw new Error("Faltan las variables de configuración de Supabase");
-            status("Comprobando contraseña…");
-            const { data, error } = await client.auth.signInWithPassword({
-                email: EDITOR_EMAIL, password: el("cloudPassword").value,
-            });
-            if (error) throw new Error("No se pudo desbloquear. Comprueba la contraseña, la cuenta confirmada y la conexión.");
-            if (data.user?.id !== OWNER_ID) {
-                await client.auth.signOut();
-                user = null;
-                throw new Error("La cuenta no corresponde al propietario configurado.");
-            }
-            user = data.user;
-            el("cloudPassword").value = "";
-            await refresh();
-        });
-    };
-    el("refreshCloud").onclick = () => run(refresh);
-    el("logoutCloud").onclick = () => run(async () => {
-        if (client) { const { error } = await client.auth.signOut(); check(error); }
-        user = null;
-        await refresh();
-        status("Edición bloqueada. Los recuerdos de la nube siguen visibles sin contraseña.");
-    });
     el("migrateCloud").onclick = () => run(async () => {
         requireUser();
         const list = sourceBackup || localPages();
@@ -279,23 +386,24 @@ export async function initCloudPanel(callbacks) {
         exportPages(list, `diario-nube-${Date.now()}.json`);
         status("Respaldo de la nube solicitado. Comprueba la descarga y consérvalo en privado.");
     });
-    syncUI();
-    if (!client) {
-        status("Faltan VITE_SUPABASE_URL y VITE_SUPABASE_PUBLISHABLE_KEY. No se puede cargar la nube. Puedes exportar el respaldo local; no se ha borrado.");
-        return;
-    }
-    await run(async () => {
-        const { data, error } = await client.auth.getSession(); check(error);
-        user = data.session?.user?.id === OWNER_ID ? data.session.user : null;
-        if (data.session && !user) await client.auth.signOut();
-        await refresh();
-    });
+
+    clearBook();
+    status(client ? "Introduce la contraseña para abrir el libro." : "Faltan las variables de configuración de Supabase. La copia local se conserva y se puede exportar.");
+    if (!client) return;
+    // La sesión vive en memoria: al recargar se vuelve a pedir la contraseña.
     client.auth.onAuthStateChange((_event, session) => {
-        user = session?.user?.id === OWNER_ID ? session.user : null;
-        syncUI();
+        if (authAction) return;
+        const nextUser = session?.user?.id === OWNER_ID ? session.user : null;
+        if (!nextUser && user) {
+            clearBook();
+            status("La sesión terminó. Abre el libro con tu contraseña.");
+        } else if (nextUser && user) {
+            user = nextUser;
+            syncUI();
+        }
     });
     setInterval(() => {
-        if (client && !document.hidden && Date.now() - signedAt > 45 * 60 * 1000 && !hooks.isBusy() && !running && !el("photoViewer").open) {
+        if (user && loaded && !document.hidden && Date.now() - signedAt > 5 * 60 * 1000 && !hooks.isBusy() && !running && !el("photoViewer").open) {
             run(refresh);
         }
     }, 60000);
