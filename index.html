@@ -13,9 +13,19 @@
     rel="stylesheet" />
 
   <link rel="stylesheet" href="/src/style.css" />
+  <style>
+    body.is-readonly #addPageBtn,
+    body.is-readonly #book .delete-page {
+      display: none !important;
+    }
+
+    #cloudPanel [hidden] {
+      display: none !important;
+    }
+  </style>
 </head>
 
-<body>
+<body class="is-readonly">
   <div class="hearts-container" id="heartsContainer"></div>
 
   <!-- LIBRO -->
@@ -35,8 +45,18 @@
     </button>
 
     <div class="book-controls no-print">
-      <button class="btn btn-ghost" id="addPageBtn">+ Nueva página</button>
-      <button class="btn btn-primary" id="printBtn">Imprimir libro</button>
+      <button type="button" id="openCloudPanel" class="cloud-launcher no-print" aria-label="Edición y respaldo"
+        title="Edición y respaldo">
+        🖌️
+      </button>
+
+      <button class="btn btn-ghost" id="addPageBtn">
+        + Nueva página
+      </button>
+
+      <button class="btn btn-primary" id="printBtn">
+        Imprimir libro
+      </button>
     </div>
 
     <p class="page-counter" id="pageCounter"></p>
@@ -103,7 +123,43 @@
   </audio>
 
   <button class="music-btn no-print" id="musicBtn" title="Música">🎵</button>
+  <!-- VISOR DE FOTOS -->
+  <dialog id="photoViewer" class="photo-viewer no-print" aria-label="Foto ampliada">
+    <div class="photo-viewer-card">
+      <button type="button" id="closePhotoViewer" class="photo-viewer-close" aria-label="Cerrar foto ampliada"
+        autofocus>
+        Cerrar ×
+      </button>
 
+      <figure class="photo-viewer-content">
+        <img id="photoViewerImage" alt="" />
+        <figcaption id="photoViewerCaption"></figcaption>
+      </figure>
+    </div>
+  </dialog>
+
+  <dialog id="cloudPanel" class="cloud-panel no-print" aria-labelledby="cloudTitle">
+    <button type="button" id="closeCloudPanel" class="cloud-close">Cerrar ×</button>
+    <h2 id="cloudTitle">Edición y respaldo</h2>
+    <p id="cloudStatus" role="status" aria-live="polite">Preparando…</p>
+    <form id="cloudLogin">
+      <label>Contraseña de edición <input id="cloudPassword" type="password" autocomplete="current-password"
+          required></label>
+      <button class="btn btn-primary" type="submit">Desbloquear edición</button>
+    </form>
+    <div class="cloud-actions">
+      <button type="button" id="backupLocal" class="btn btn-ghost">1. Exportar respaldo local</button>
+      <label class="btn btn-ghost">Importar archivo de respaldo
+        <input type="file" id="importBackup" accept="application/json,.json">
+      </label>
+      <button type="button" id="migrateCloud" class="btn btn-primary">2. Migrar copia local a la nube</button>
+      <button type="button" id="refreshCloud" class="btn btn-ghost">Actualizar nube</button>
+      <button type="button" id="backupCloud" class="btn btn-ghost">Exportar respaldo de la nube</button>
+      <button type="button" id="logoutCloud" class="btn btn-ghost">Bloquear edición</button>
+    </div>
+    <p class="cloud-note">Migrar no borra los recuerdos locales. Guarda y comprueba el respaldo descargado antes de
+      migrar. Los archivos de respaldo contienen tus fotos y textos: no los subas a GitHub.</p>
+  </dialog>
   <script type="module" src="/src/main.js"></script>
 </body>
 

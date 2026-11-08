@@ -1,3 +1,5 @@
+import { cloud, initCloudPanel, cloudEnabled } from "./cloud.js";
+import "./detalles-galeria.js";
 /* =========================================
    ELEMENTOS DEL LIBRO
    ========================================= */
@@ -29,20 +31,14 @@ let pages = [];
 let currentIndex = 0;
 let isTurning = false;
 let isSaving = false;
+let draftCloudId = crypto.randomUUID();
 
 /* =========================================
    LEER RECUERDOS GUARDADOS
    ========================================= */
 
-try {
-  const stored = JSON.parse(
-    localStorage.getItem(STORAGE_KEY) || "[]"
-  );
-
-  pages = Array.isArray(stored) ? stored : [];
-} catch (error) {
-  console.error("No se pudo leer el diario:", error);
-}
+// La copia local se conserva para exportar y migrar, pero la vista usa la nube.
+pages = [];
 
 /* =========================================
    UTILIDADES
@@ -75,6 +71,7 @@ function normalizePhotos(photos = []) {
       }
 
       return {
+        ...photo,
         src: photo?.src || "",
         caption: photo?.caption || "",
       };
@@ -82,40 +79,90 @@ function normalizePhotos(photos = []) {
     .filter((photo) => photo.src);
 }
 
-function persistPages(nextPages) {
+async function persistPages(nextPages) {
   try {
-    localStorage.setItem(
-      STORAGE_KEY,
-      JSON.stringify(nextPages)
-    );
-
-    pages = nextPages;
-
+    if (!cloudEnabled) throw new Error("Falta configurar Supabase");
+    await cloud.persist(pages, nextPages);
+    pages = await cloud.load();
     return true;
   } catch (error) {
-    console.error("Error de guardado:", error);
-
-    alert(
-      "No se pudo guardar. El almacenamiento del navegador " +
-      "puede estar lleno. Prueba con fotos más livianas. " +
-      "El formulario seguirá abierto."
-    );
-
+    console.error(error);
+    alert("No se pudo guardar: " + error.message + ". El formulario se conserva.");
     return false;
   }
 }
 
 function fileToDataUrl(file) {
   return new Promise((resolve, reject) => {
-    const reader = new FileReader();
+    const image = new Image();
+    const objectUrl = URL.createObjectURL(file);
 
-    reader.onload = () => resolve(reader.result);
+    image.onload = () => {
+      try {
+        const maxSide = 1400;
+        const scale = Math.min(
+          1,
+          maxSide / Math.max(image.naturalWidth, image.naturalHeight)
+        );
 
-    reader.onerror = () => {
-      reject(new Error("No se pudo leer la imagen."));
+        const canvas = document.createElement("canvas");
+
+        canvas.width = Math.max(
+          1,
+          Math.round(image.naturalWidth * scale)
+        );
+
+        canvas.height = Math.max(
+          1,
+          Math.round(image.naturalHeight * scale)
+        );
+
+        const context = canvas.getContext("2d");
+
+        if (!context) {
+          throw new Error("No se pudo preparar la imagen.");
+        }
+
+        // Fondo blanco para imágenes con transparencia.
+        context.fillStyle = "#ffffff";
+        context.fillRect(0, 0, canvas.width, canvas.height);
+
+        context.drawImage(
+          image,
+          0,
+          0,
+          canvas.width,
+          canvas.height
+        );
+
+        const compressedImage = canvas.toDataURL(
+          "image/jpeg",
+          0.8
+        );
+
+        if (!compressedImage.startsWith("data:image/jpeg")) {
+          throw new Error("No se pudo comprimir la imagen.");
+        }
+
+        resolve(compressedImage);
+      } catch (error) {
+        reject(error);
+      } finally {
+        URL.revokeObjectURL(objectUrl);
+      }
     };
 
-    reader.readAsDataURL(file);
+    image.onerror = () => {
+      URL.revokeObjectURL(objectUrl);
+
+      reject(
+        new Error(
+          "No se pudo abrir la foto. Prueba con una imagen JPG o PNG."
+        )
+      );
+    };
+
+    image.src = objectUrl;
   });
 }
 function createBackCover() {
@@ -124,7 +171,7 @@ function createBackCover() {
   section.className = "book-back-cover";
 
   section.innerHTML = `
-    <img class="back-cover-photo" src="/foto-contraportada.jpg" alt="Foto de la contraportada" loading="eager" />
+    <img class="back-cover-photo" src="${import.meta.env.BASE_URL}foto-contraportada.jpg" alt="Foto de la contraportada" loading="eager" />
     <div class="back-cover-veil" aria-hidden="true"></div>
     <div class="back-cover-content">
       <span class="back-cover-heart" aria-hidden="true">
@@ -358,7 +405,8 @@ function createStoryPage(data, index) {
   if (data.kind === "text") return createTextPage(data, index);
   const section = document.createElement("section");
 
-  section.className = "page";
+  section.className = "page story-page";
+  section.dataset.photos = String(normalizePhotos(data.photos).length);
 
   const photos = normalizePhotos(data.photos);
 
@@ -366,14 +414,14 @@ function createStoryPage(data, index) {
     .map(
       (photo) => `
         <figure class="polaroid">
-          <div class="polaroid-photo">
+          <button type="button" class="polaroid-photo" aria-label="Ampliar foto">
             <img
               src="${escapeHtml(photo.src)}"
               alt="${escapeHtml(
         photo.caption || "Recuerdo del diario"
       )}"
             />
-          </div>
+          </button>
 
           <figcaption class="polaroid-caption">
             ${escapeHtml(
@@ -386,7 +434,12 @@ function createStoryPage(data, index) {
     .join("");
 
   section.innerHTML = `
-    <div class="page-inner">
+   <div
+  class="page-inner"
+  tabindex="0"
+  role="region"
+  aria-label="Contenido del recuerdo. Desplázate para ver las fotos y la descripción."
+>
       <header class="page-header">
         <div>
           <h2 class="page-title">
@@ -415,12 +468,9 @@ function createStoryPage(data, index) {
         ${photosHtml}
       </div>
 
-      ${data.text
-      ? `
-            <p class="page-text">${escapeHtml(data.text)}</p>
-          `
-      : ""
-    }
+      <div class="story-description ${String(data.text || "").trim() ? "" : "is-empty"}" tabindex="0" role="region" aria-label="Descripción del recuerdo">
+        ${data.text ? `<p class="page-text">${escapeHtml(data.text)}</p>` : ""}
+      </div>
 
       <button
         type="button"
@@ -452,7 +502,7 @@ function updateControls() {
   nextBtn.disabled =
     isTurning || currentIndex >= totalSheets - 1;
 
-  addPageBtn.disabled = isTurning;
+  addPageBtn.disabled = isTurning || !cloud.editor;
   printBtn.disabled = isTurning;
 
   if (currentIndex === 0) {
@@ -823,7 +873,7 @@ window.addEventListener("pageshow", (event) => {
    BOTONES DENTRO DEL LIBRO
    ========================================= */
 
-book.addEventListener("click", (event) => {
+book.addEventListener("click", async (event) => {
   const openButton = event.target.closest(
     "[data-open-book]"
   );
@@ -859,6 +909,7 @@ book.addEventListener("click", (event) => {
   );
 
   if (!deleteButton || isTurning) return;
+  if (!cloud.ready) { alert("Desbloquea la edición antes de borrar."); return; }
 
   const index = Number(
     deleteButton.dataset.delete
@@ -876,7 +927,7 @@ book.addEventListener("click", (event) => {
     (_, itemIndex) => itemIndex !== index
   );
 
-  if (persistPages(nextPages)) {
+  if (await persistPages(nextPages)) {
     renderBook(currentIndex);
   }
 });
@@ -887,6 +938,10 @@ book.addEventListener("click", (event) => {
 
 function openModal() {
   if (isTurning) return;
+  if (!cloud.ready) {
+    alert("Pulsa Desbloquear edición e introduce tu contraseña. Si hubo un error, pulsa Actualizar nube.");
+    return;
+  }
 
   pageModal.classList.remove("hidden");
 
@@ -1061,6 +1116,7 @@ pageForm.addEventListener("submit", async (event) => {
     }
 
     const newPage = {
+      _pendingId: draftCloudId,
       kind: pageKind.value,
       title: document.getElementById(
         "pageTitle"
@@ -1091,16 +1147,18 @@ pageForm.addEventListener("submit", async (event) => {
       throw new Error("Escribe el texto de la carta.");
     }
 
-    saved = persistPages([
+    saved = await persistPages([
       ...pages,
       newPage,
     ]);
 
     if (saved) {
+      alert("Página guardada en la nube. En otro dispositivo recarga para verla.");
       // 0 = portada, 1 = dedicatoria.
       // Los recuerdos comienzan en el índice 2.
       renderBook(pages.length + 1);
 
+      draftCloudId = crypto.randomUUID();
       pageForm.reset();
 
       photoCount.value = "2";
@@ -1132,20 +1190,20 @@ pageForm.addEventListener("submit", async (event) => {
    IMPRESIÓN
    ========================================= */
 printBtn.addEventListener("click", async () => {
-  if (isTurning) return;
+  if (isTurning || isSaving) return;
   printBtn.disabled = true;
   try {
     await document.fonts.ready;
-    const photo = book.querySelector(".back-cover-photo");
-    if (photo) {
-      try {
-        await photo.decode();
-      } catch (error) {
-        alert("No se pudo cargar la foto de contraportada. Revisa que exista public/foto-contraportada.jpg y que la extensión coincida. No se abrió la impresión para evitar una tapa sin foto.");
-        return;
-      }
+    const printableImages = [...book.querySelectorAll("img")];
+    const imageResults = await Promise.allSettled(printableImages.map((image) => image.decode()));
+    if (imageResults.some((result) => result.status === "rejected")) {
+      if (!confirm("Alguna imagen no pudo cargarse. ¿Quieres imprimir de todas formas?")) return;
     }
+    preparePrintBook();
     window.print();
+  } catch (error) {
+    console.error(error);
+    alert("No se pudo preparar la impresión: " + error.message);
   } finally {
     printBtn.disabled = false;
   }
@@ -1186,7 +1244,71 @@ function createHearts() {
     }, 12500);
   }, 1100);
 }
+// VISOR DE FOTOS
 
+const photoViewer = document.getElementById("photoViewer");
+const photoViewerImage = document.getElementById("photoViewerImage");
+const photoViewerCaption = document.getElementById("photoViewerCaption");
+const closePhotoViewer = document.getElementById("closePhotoViewer");
+
+function openPhotoViewer(image) {
+  const figure = image.closest("figure");
+  const caption =
+    figure?.querySelector("figcaption")?.textContent.trim() || "";
+
+  photoViewerImage.src = image.currentSrc || image.src;
+  photoViewerImage.alt = image.alt || caption || "Foto del diario";
+  photoViewerCaption.textContent = caption;
+
+  if (!photoViewer.open) {
+    photoViewer.showModal();
+  }
+}
+
+function hidePhotoViewer() {
+  photoViewer.close();
+}
+
+// También funciona con las páginas que se añadan después.
+document.getElementById("book").addEventListener("click", (event) => {
+  const image = event.target.closest(".polaroid-photo")?.querySelector("img");
+
+  if (!image || isTurning) return;
+
+  openPhotoViewer(image);
+});
+
+closePhotoViewer.addEventListener("click", hidePhotoViewer);
+
+// El dialog ocupa la pantalla; la tarjeta conserva la foto enmarcada.
+photoViewer.addEventListener("click", (event) => {
+  if (event.target !== photoViewerImage && !event.target.closest("#closePhotoViewer")) hidePhotoViewer();
+});
+
+// Evita que las flechas pasen páginas mientras se mira una foto.
+// Escape sigue funcionando mediante el comportamiento del dialog.
+window.addEventListener(
+  "keydown",
+  (event) => {
+    if (!photoViewer.open) return;
+
+    if (
+      event.key === "ArrowLeft" ||
+      event.key === "ArrowRight" ||
+      event.key === "Escape"
+    ) {
+      event.stopImmediatePropagation();
+    }
+  },
+  true
+);
+
+// Libera la imagen al cerrar el visor.
+photoViewer.addEventListener("close", () => {
+  photoViewerImage.removeAttribute("src");
+  photoViewerImage.alt = "";
+  photoViewerCaption.textContent = "";
+});
 /* =========================================
    INICIAR
    ========================================= */
@@ -1200,3 +1322,150 @@ createHearts();
 
 updateMusicButton();
 playMusic();
+initCloudPanel({
+  onLoaded(loaded) { pages = loaded; renderBook(currentIndex); },
+  onAccess() { updateControls(); },
+  isBusy: () => isSaving || isTurning || !pageModal.classList.contains("hidden"),
+});
+
+/* Impresión independiente: medir antes de separar la descripción. */
+function removePrintBook() {
+  document.getElementById("printBook")?.remove();
+}
+
+function preparePrintBook() {
+  removePrintBook();
+  const root = document.createElement("div");
+  root.id = "printBook";
+  root.setAttribute("aria-hidden", "true");
+  document.body.appendChild(root);
+
+  function sheet(className = "") {
+    const outer = document.createElement("section");
+    outer.className = `print-sheet ${className}`;
+    const inner = document.createElement("div");
+    inner.className = "print-sheet-inner";
+    outer.appendChild(inner);
+    root.appendChild(outer);
+    return { outer, inner };
+  }
+
+  function fits(inner) {
+    return inner.scrollHeight <= inner.clientHeight + 1;
+  }
+
+  function titleNode(title) {
+    const node = document.createElement("h2");
+    node.className = "print-title";
+    node.textContent = title;
+    return node;
+  }
+
+  function textSheets(title, text) {
+    const words = String(text).match(/\S+\s*/g) || [];
+    let offset = 0;
+    while (offset < words.length) {
+      const { inner } = sheet("print-centered");
+      inner.appendChild(titleNode(title));
+      const paragraph = document.createElement("p");
+      paragraph.className = "print-long-text";
+      inner.appendChild(paragraph);
+      let low = 1;
+      let high = words.length - offset;
+      let best = 0;
+      while (low <= high) {
+        const middle = Math.floor((low + high) / 2);
+        paragraph.textContent = words.slice(offset, offset + middle).join("");
+        if (fits(inner)) { best = middle; low = middle + 1; }
+        else { high = middle - 1; }
+      }
+      if (best === 0) {
+        throw new Error("Un título o una palabra no cabe en la hoja de impresión. Acórtalo antes de imprimir.");
+      }
+      paragraph.textContent = words.slice(offset, offset + best).join("").trim();
+      offset += best;
+    }
+  }
+
+  const cover = sheet("print-cover");
+  cover.outer.style.backgroundImage = `linear-gradient(#0003, #0009), url("${import.meta.env.BASE_URL}foto-portada.jpg")`;
+  cover.inner.appendChild(book.querySelector(".cover-content").cloneNode(true));
+
+  const heading = book.querySelector(".birthday-text-heading");
+  const originalLetter = book.querySelector(".birthday-text-letter");
+  let dedication = sheet();
+  dedication.inner.appendChild(heading.cloneNode(true));
+  let letter = document.createElement("div");
+  letter.className = "print-dedication-letter";
+  dedication.inner.appendChild(letter);
+  for (const child of originalLetter.children) {
+    const clone = child.cloneNode(true);
+    letter.appendChild(clone);
+    if (!fits(dedication.inner)) {
+      clone.remove();
+      dedication = sheet();
+      dedication.inner.appendChild(titleNode("Una carta para ti"));
+      letter = document.createElement("div");
+      letter.className = "print-dedication-letter";
+      dedication.inner.appendChild(letter);
+      letter.appendChild(clone);
+      if (!fits(dedication.inner)) {
+        clone.remove();
+        dedication.outer.remove();
+        textSheets("Una carta para ti", child.textContent.trim());
+        dedication = sheet();
+        dedication.inner.appendChild(titleNode("Una carta para ti"));
+        letter = document.createElement("div");
+        letter.className = "print-dedication-letter";
+        dedication.inner.appendChild(letter);
+      }
+    }
+  }
+  if (!letter.children.length) dedication.outer.remove();
+
+  const memoryPages = [...book.querySelectorAll(".story-page, .text-only-page")];
+  for (const [index, data] of pages.entries()) {
+    if (data.kind === "text") {
+      textSheets(data.title || "Una carta", data.text || "");
+      continue;
+    }
+    const original = memoryPages[index];
+    const { inner } = sheet();
+    inner.appendChild(original.querySelector(".page-header").cloneNode(true));
+    const grid = original.querySelector(".polaroid-grid").cloneNode(true);
+    grid.className = "print-photo-grid";
+    const count = grid.children.length;
+    const columns = count === 1 ? 1 : count >= 5 ? 3 : 2;
+    grid.style.setProperty("--columns", columns);
+    grid.style.setProperty("--rows", Math.max(1, Math.ceil(count / columns)));
+    grid.style.setProperty("--photo-height", count <= 2 ? "95mm" : count <= 4 ? "142mm" : "128mm");
+    inner.appendChild(grid);
+    // Respeta títulos largos sin empujar la cuadrícula fuera del papel.
+    let photoHeight = count <= 2 ? 95 : count <= 4 ? 142 : 128;
+    while (!fits(inner) && photoHeight > 50) {
+      photoHeight -= 5;
+      grid.style.setProperty("--photo-height", `${photoHeight}mm`);
+    }
+    if (!fits(inner)) throw new Error("El título o las leyendas son demasiado extensos para la hoja de fotos.");
+    const description = String(data.text || "").trim();
+    if (description) {
+      const paragraph = document.createElement("p");
+      paragraph.className = "print-inline-description";
+      paragraph.textContent = description;
+      inner.appendChild(paragraph);
+      if (!fits(inner)) {
+        paragraph.remove();
+        textSheets(data.title || "Un recuerdo especial", description);
+      }
+    }
+  }
+
+  const back = sheet("print-back");
+  const originalBack = book.querySelector(".book-back-cover");
+  for (const child of originalBack.children) back.inner.appendChild(child.cloneNode(true));
+}
+
+window.addEventListener("beforeprint", () => {
+  if (!document.getElementById("printBook")) preparePrintBook();
+});
+window.addEventListener("afterprint", removePrintBook);
